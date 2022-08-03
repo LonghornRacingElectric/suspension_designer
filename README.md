@@ -1,2 +1,2 @@
-# pythonTemplate
- Personal Template for Python Dominate Repositories
+# suspension_designer
+An suite for designing automotive multibody suspension kinematics
