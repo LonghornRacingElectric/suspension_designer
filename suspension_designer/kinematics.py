@@ -13,9 +13,18 @@ __all__ = ['poi_factory', 'euler_rotation',
            'KinematicFrame', 'KinematicTransform', 'KinematicSystem']
 
 
-def poi_factory(name: str = '', position: npt.ArrayLike = np.empty(3), style: str = 'k.' ) -> dict:
-    """Default Point of Interest Factory"""
-    return {'name': name, 'position': np.array(position), 'style': style}
+def poi_factory(name: str, position: npt.ArrayLike, style: str = 'k.' ) -> dict:
+    """Point of Interest Factory"""
+    return {name: {'position': np.array(position, dtype=np.float), 'style': style}}
+
+
+def default_poi_factory() -> dict:
+    """Default Points of Interest Factory"""
+    out = {}
+    for poi in (['O', [0,0,0]], ['E1', [1,0,0]], ['E2', [0,1,0]], ['E3', [0,0,1]]):
+        out.update(poi_factory(*poi)) 
+
+    return out 
 
 
 def euler_rotation(angle: float, axis: int, point: npt.ArrayLike) -> npt.ArrayLike:
@@ -36,7 +45,7 @@ def euler_rotation(angle: float, axis: int, point: npt.ArrayLike) -> npt.ArrayLi
 
 class KinematicFrame(col.UserDict):
     """Kinematic reference frame in 3D space"""
-    def __init__(self, name: str='', poi: dict=poi_factory(), style: str='k'):
+    def __init__(self, name: str='', poi: dict=default_poi_factory(), style: str='k'):
         """Allocate KinematicFrame instance properties"""
         super().__init__({'name': name, 'poi': poi, 'style': style})
 

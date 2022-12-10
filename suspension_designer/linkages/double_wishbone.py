@@ -20,6 +20,9 @@ class DoubleWishbone(KinematicSystem):
             ('LB','W'), ('UB','W'), ('TB','W')])
 
         # Allocate Options
+        self.vehicle = options['vehicle']
+        self.target  = options['target']
+        self.bound   = options['bound']
 
     def design(self):
         pass
