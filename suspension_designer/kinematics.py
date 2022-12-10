@@ -1,13 +1,5 @@
-"""kinematics.py - Kinematic Frames, Transforms, and Systems
+"""kinematics.py - Kinematic Frames, Transforms, and Systems"""
 
-- poi_factory()
-- euler_rotation()
-- KinematicFrame()
-- KinematicTransform()
-- KinematicSystem()
-"""
-
-# %% Imports
 from __future__ import annotations
 
 import collections as col
@@ -17,7 +9,10 @@ import numpy as np
 import networkx as nx
 
 
-# %% Code
+__all__ = ['poi_factory', 'euler_rotation', 
+           'KinematicFrame', 'KinematicTransform', 'KinematicSystem']
+
+
 def poi_factory(name: str = '', position: npt.ArrayLike = np.empty(3), style: str = 'k.' ) -> dict:
     """Default Point of Interest Factory"""
     return {'name': name, 'position': np.array(position), 'style': style}
