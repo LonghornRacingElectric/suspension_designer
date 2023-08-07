@@ -1,271 +1,494 @@
 """kinematics.py - Kinematic Frames, Transforms, and Systems"""
 from __future__ import annotations
 
-from collections import UserDict
+import numpy.typing as npt
+from dataclasses import dataclass
+
+import operator as op
 
 import numpy as np
+
 import networkx as nx
 import matplotlib.pyplot as plt
 
-__all__ = ['poi_factory', 'default_poi_factory', 'euler_rotation', 
+from suspension_designer.geometry import EulerRotation
+
+__all__ = ['DatumPoint', 'datum_point_factory', 'default_datum_factory', 
            'KinematicFrame', 'KinematicTransform', 'KinematicSystem']
 
-def poi_factory(name: str, position: np.ndarray, style: str = 'k.') -> dict:
-    """Point of interest factory"""
-    return {name: {'position': np.array(position, dtype=np.double), 'style': style}}
+#%% Datums
+@dataclass
+class DatumPoint:
+    """Reference point datum
 
-def default_poi_factory() -> dict:
-    """Default points of interest factory"""
+    :param name: Datum name
+    :type name: str
+
+    :param position: Datum position
+    :type position: numpy.ndarray
+
+    :param style: Plotting style, defaults to 'k.'
+    :type style: str, optional
+    """
+    name: str
+    position: np.ndarray
+    style: str = 'k.'
+
+def datum_point_factory(name: str, position: npt.ArrayLike, style = 'k.') -> dict[str, DatumPoint]:
+    """Datum point dictionary factory
+    
+    :param name: Datum name
+    :type name: str
+
+    :param position: Datum position
+    :type position: numpy.typing.ArrayLike
+
+    :param style: Plotting style, defaults to 'k.'
+    :type style: str, optional
+
+    :return: Datum point dictionary pair
+    :rtype: dict[str, DatumPoint]
+    """
+    return {name: DatumPoint(name, np.array(position, dtype=np.double), style)}
+
+def default_datum_factory() -> dict:
+    """Default Cartesian datum dictionary factory
+    
+    :return: Default datum point dictionary
+    :rtype: dict[str, DatumPoint]
+    """
+    default_name     = ['O']     + [f'E{i}'      for i in range(3)]
+    default_position = [[0,0,0]] + [np.eye(3)[i] for i in range(3)]
+
     out = {}
-    for poi in (['O', [0,0,0]], ['E0', [1,0,0]], ['E1', [0,1,0]], ['E2', [0,0,1]]):
-        out.update(poi_factory(*poi)) 
+    for name, position in zip(default_name, default_position):
+        out.update(datum_point_factory(name, position)) 
 
     return out 
 
-def euler_rotation(angle: np.number, axis: int, point: np.ndarray) -> np.ndarray:
-    """Applies a rotation transform about a primary frame axis"""
-    ia  : int = np.mod(axis,3)
-    iap1: int = np.mod(axis+1,3)
-    iam1: int = np.mod(axis-1,3)
+class KinematicFrame(dict):
+    """Kinematic reference frame in 3D space
+    
+    :param name: Frame name, defaults to ''
+    :type name: str, optional
 
-    R = np.zeros((3,3), dtype=np.double)
-    R[ia  , ia  ] = 1
-    R[iam1, iam1] =  np.cos(angle)
-    R[iap1, iap1] =  np.cos(angle)
-    R[iam1, iap1] =  np.sin(angle)
-    R[iap1, iam1] = -np.sin(angle)
+    :param datum: Datums associated with frame, defaults to default_datum_factory()
+    :type datum: dict[str, DatumPoint], optional
 
-    return np.matmul(R, point)
-
-class KinematicFrame(UserDict):
-    """Kinematic reference frame in 3D space"""
-    def __init__(self, name: str='', poi: dict=default_poi_factory(), color: str='k'):
-        """Allocate KinematicFrame instance properties"""
-        super().__init__({'name': name, 'poi': poi, 'color': color})
-
-class KinematicTransform(UserDict):
-    """Kinematic tranformation between reference frames"""
+    :param color: Plotting color, defaults to 'k'
+    :type color: str, optional
+    """
     def __init__(self, 
-            position: np.ndarray = np.zeros(3, dtype=np.double),
-            rotation: np.ndarray = np.zeros(3, dtype=np.double),                # intrinsic
-            sequence: np.ndarray = np.array([0,3,2,1], dtype=np.ushort),
-            dof     : np.ndarray = np.zeros(6, dtype=np.bool_) ):
-        """Initialize KinematicTransform"""
-        super().__init__({
-            'position': np.array(position, dtype=np.double), 
-            'rotation': np.array(rotation, dtype=np.double),
-            'sequence': np.array(sequence, dtype=np.ushort),
-            'dof'     : np.array(dof, dtype=np.bool_)})
+                 name: str = '', 
+                 datum: dict[str, DatumPoint] = default_datum_factory(), 
+                 color: str = 'k'):
+        """Initialize KinematicFrame"""
+        self.name = name
+        self.datum = datum
+        self.color = color
 
-    def transform(self, point: np.ndarray, direction: str = 'f') -> np.ndarray:
-        """Streamline invoking kinematic affine transformations"""
-        if any([direction == d for d in ['f', 'forward']]):
+class KinematicTransform(dict):
+    """Kinematic tranformation between reference frames
+
+    :param position: Frame origin position in base frame, defaults to :code:`numpy.zeros(3)`
+    :type position: numpy.typing.ArrayLike, optional
+
+    :param angle: Intrinsic Euler angles [X,Y,Z], defaults to :code:`numpy.zeros(3)`
+    :type angle: numpy.typing.ArrayLike, optional
+
+    :param sequence: Euler angle sequence, defaults to :code`'ZYX'`
+    :type sequence: str, optional
+
+    :param degrees: Flag to denote if angles are supplied in degrees, defaults to :code:`False`
+    :type degrees: bool, optional
+    """
+    def __init__(self, 
+            position: npt.ArrayLike | None = None,  # Longitudinal (X), Lateral (Y), Vertical (Z)
+            angle   : npt.ArrayLike | None = None,  # Roll (X), Pitch (Y), Yaw (Z)
+            sequence: str = 'ZYX', degrees: bool = True):
+        """Intialize KinematicTransform"""
+        position = position if position is not None else np.zeros(3)
+        angle    = angle    if angle    is not None else np.zeros(3)
+
+        self.position = position
+        self.rotation = EulerRotation(angle, sequence, degrees)
+    
+    position: np.ndarray = property(op.attrgetter('_position'))
+
+    @position.setter
+    def position(self, value: npt.ArrayLike):
+        """Sets position to array conversion with double datatype
+        
+        :param value: Relative position between frames
+        :type value: numpy.ndarray
+        """
+        self._position = np.array(value, dtype=np.double)
+
+    @property
+    def sequence(self) -> str:
+        """Returns rotation sequence from rotation attribute
+        
+        :return: Sequence string
+        :rtype: str
+        """
+        return self.rotation.sequence
+    
+    @sequence.setter
+    def sequence(self, value: str):
+        """Sets rotation sequence through rotation attribute
+        
+        :param value: Rotation sequence
+        :type value: str
+        """
+        self.rotation.sequence = value
+
+    def transform(self, point: npt.ArrayLike, orientation: str = 'f') -> np.ndarray:
+        """Streamline kinematic affine transformations
+
+        :param point: Point position vector
+        :type point: numpy.typing.ArrayLike
+
+        :param orientation: Transformation orientation, defaults to 'f'
+        :type orientation: str, optional
+
+        :raises ValueError: If `orientation` is not recognized
+        
+        :return: Point position vector in new frame
+        :rtype: numpy.ndarray
+        """
+        if orientation in ['f', 'forward']:
             return self.forward_transform(np.array(point))
-        elif any([direction == d for d in ['r', 'i', 'reverse', 'inverse']]):
+        elif orientation in ['r', 'i', 'reverse', 'inverse']:
             return self.inverse_transform(np.array(point))
         else:
-            raise ValueError('Transformation direction argument not valid') 
+            raise ValueError('Transformation orientation argument not valid') 
     
-    def forward_transform(self, pB: np.ndarray) -> np.ndarray:
-        """Perform forward transform from base to follower frame"""
-        pF = pB
-        for s in self['sequence']:
-            if s == 0:
-                pF = pF - self['position']
-            else:
-                pF = euler_rotation(self['rotation'][s-1], s-1, pF) 
-
-        return pF 
-            
-    def inverse_transform(self, pF: np.ndarray) -> np.ndarray:
-        """Perform inverse transform from follower to base frame"""
-        pB = pF
-        for s in np.flip(self['sequence']):
-            if s == 0:
-                pB = pB + self['position']
-            else:
-                pB = euler_rotation(-self['rotation'][s-1], s-1, pB)
-
-        return pB 
-
-    def rotate(self, d: np.ndarray, direction: str = 'f') -> np.ndarray:
-        """Streamline invoking kinematic rotations"""
-        if any([direction == d for d in ['f', 'forward']]):
-            return self.forward_rotation(np.array(d))
-        elif any([direction == d for d in ['r', 'i', 'reverse', 'inverse']]):
-            return self.inverse_rotation(np.array(d))
-        else:
-            raise ValueError('Rotation direction argument not valid') 
+    def forward_transform(self, point: np.ndarray) -> np.ndarray:
+        """Perform forward transform from base to follower frame
         
-    def forward_rotation(self, dB: np.ndarray) -> np.ndarray:
-        """Perform forward rotation from base to follower frame"""
-        dF = dB
-        for s in self['sequence']:
-            if s == 0:
-                continue
+        :param point: Point position vector in base frame
+        :type point: numpy.ndarray
 
-            dF = euler_rotation(self['rotation'][s-1], s-1, dF) 
-
-        return dF 
+        :return: Point position vector in follower frame
+        :rtype: numpy.ndarray
+        """
+        return self.rotation.apply(point - self.position)
             
-    def inverse_rotation(self, dF: np.ndarray) -> np.ndarray:
-        """Perform inverse rotation from follower to base frame"""
-        dB = dF
-        for s in np.flip(self['sequence']):
-            if s == 0:
-                continue
+    def inverse_transform(self, point: np.ndarray) -> np.ndarray:
+        """Perform inverse transform from follower to base frame
+        
+        :param point: Point position vector in follower frame
+        :type point: numpy.ndarray
 
-            dB = euler_rotation(-self['rotation'][s-1], s-1, dB)
+        :return: Point position vector in base frame
+        :rtype: numpy.ndarray
+        """
+        return self.rotation.inv(point) + self.position
 
-        return dB 
-    
+    def rotate(self, direction: npt.ArrayLike, orientation: str = 'f') -> np.ndarray:
+        """Streamline kinematic affine transformations
+        
+        :param point: Direction vector
+        :type point: numpy.typing.ArrayLike
+
+        :param orientation: Transformation orientation, defaults to 'f'
+        :type orientation: str, optional
+
+        :raises ValueError: If `orientation` is not recognized
+        
+        :return: Direction vector in new frame
+        :rtype: numpy.ndarray
+        """
+        if orientation in ['f', 'forward']:
+            return self.rotation.apply(np.array(direction))
+        elif orientation in ['r', 'i', 'reverse', 'inverse']:
+            return self.rotation.inv(np.array(direction))
+        else:
+            raise ValueError('Rotation orientation argument not valid') 
+
+    # def forward_rotation(self, vector: np.ndarray) -> np.ndarray:
+    #     """Apply sequence of rotations
+        
+    #     :param vector: Vector in base frame
+    #     :type vector: numpy.ndarray
+
+    #     :return: Vector in follower frame
+    #     :rtype: numpy.ndarray
+    #     """
+    #     if self.rotation.single:
+    #         return self.rotation.apply(vector)
+        
+    #     out = vector
+    #     for r in self.rotation:
+    #         out = r.apply(out)
+
+    #     return out
+
+    # def inverse_rotation(self, vector: np.ndarray) -> np.ndarray:
+    #     """Apply reversed sequence of inverse rotations
+        
+    #     :param vector: Vector in follower frame
+    #     :type vector: numpy.ndarray
+
+    #     :return: Vector in base frame
+    #     :rtype: numpy.ndarray
+    #     """
+    #     if self.rotation.single:
+    #         return self.rotation.apply(vector, inverse=True)
+        
+    #     out = vector
+    #     for r in reversed(self.rotation):
+    #         out = r.apply(out, inverse=True)
+
+    #     return out
+     
+# %% Kinematic System
 class KinematicSystem(nx.DiGraph):
     """Kinematic reference frame graph network system"""
     node_attr_dict_factory = KinematicFrame
     edge_attr_dict_factory = KinematicTransform
 
     def __init__(self, incoming_graph_data = None, **attr):
+        """Initialize KinematicSystem"""
         super().__init__(incoming_graph_data, **attr)
         self._path: dict[tuple[str,str], list[tuple[str,str,str]]] = {}
 
-    def compute_weights(self):
-        for e in self.edges():
-            self.edges[e]['weight'] = 10+np.sum(self.edges[e]['dof'])
-
+    # Traversal
     def get_path(self, source: str, target: str) -> list[tuple[str,str,str]]:
-        """Generates transform sequence between two coordinate frames"""
+        """Generates transform sequence between two coordinate frames
+
+        :param source: Source node label
+        :type source: str
+
+        :param target: Target node label
+        :type target: str
+
+        :return: Shortest path between nodes as a list of tuples describing the 
+            transformations: (base, follower, orientation)
+        :rtype: list[tuple[str,str,str]]
+        """
         if (source, target) in self._path.keys():
+            # Path previously cached
             return self._path[(source, target)]
         elif (target, source) in self._path.keys():
+            # Reverse path previously cached
             self._path[(source, target)] = []
             for e in reversed(self._path[(target, source)]):
-                d = 'r' if e[2] in ['f', 'forward'] else 'f'
-                self._path[(source, target)].append((e[0],e[1],d))
-
+                o = 'r' if e[2] in ['f', 'forward'] else 'f'
+                self._path[(source, target)].append((e[0], e[1], o))
+    
             return self._path[(source, target)]
-        
-        # Path not previously determined
+       
+        # Path not previously cached
         nodes = nx.shortest_path(self.to_undirected(as_view=True), source, target)
+        self._path[(source,target)] = self.path(nodes)
+    
+        return self._path[(source,target)]
+    
+    def path(self, nodes: list[str], search: bool = False) -> list[tuple[str,str,str]]:
+        """Generates transform sequence from list of nodes
+        
+        :param nodes: Sequence of node labels that define a path
+        :type nodes: list[str]
 
-        self._path[(source,target)] = []
+        :param search: Allow node list to be non-adjacent, defaults to False
+        :type search: bool, optional
+
+        :raises KeyError: If `search` is `False` and node list is non-adjacent
+
+        :return: Path from node list as a list of tuples describing the 
+            transformations: (base, follower, orientation)
+        :rtype: list[tuple[str,str,str]]
+        """
+        path = []
         for j in range(len(nodes)-1):
             if (nodes[j], nodes[j+1]) in self.edges:
-                self._path[(source, target)].append((nodes[j], nodes[j+1], 'forward'))
+                path.append((nodes[j], nodes[j+1], 'forward'))
             elif (nodes[j+1], nodes[j]) in self.edges:
-                self._path[(source, target)].append((nodes[j+1], nodes[j], 'reverse'))
+                path.append((nodes[j+1], nodes[j], 'reverse'))
             else:
-                KeyError("Edge ({},{}) is not present".format(nodes[j], nodes[j+1]))
+                if search:
+                    path += self.get_path(nodes[j], nodes[j+1])
+                else:
+                    raise KeyError("Edge ({},{}) is not present".format(nodes[j], nodes[j+1]))
 
-        return self._path[(source,target)]
+        return path
 
-    def get_loops(self, subgraph=None):
-        """Generates a directed minimum loop basis for a subgraph"""
+    def loops(self, subgraph: list[str] = None) -> list:                                            # TODO: check return type
+        """Generates a directed minimum loop basis for a subgraph
+
+        :param subgraph: List of node labels comprising a subgraph, defaults to None
+        :type subgraph: list[str], optional
+
+        :return: List of directed edges 
+        :rtype: list[tuple[str, str]]
+        """
         if subgraph is None: 
             goi = self
         else:
             goi = self.subgraph(subgraph)
 
-        mcb = nx.minimum_cycle_basis(goi.to_undirected(as_view=True), weight='weight')              # type: ignore
+        mcb = nx.minimum_cycle_basis(goi.to_undirected(as_view=True))              
 
-        self.loop = []
+        loop = []
         for c in mcb:
-            self.loop.append(nx.find_cycle(goi.subgraph(c), orientation='ignore'))                  # type: ignore
+            loop.append(nx.find_cycle(goi.subgraph(c), orientation='ignore'))                       
+        
+        return loop
 
-    def coord(self, poi: str | np.ndarray, frame: str, out_frame: str | None = None) -> np.ndarray:
-        """Reports point of interest coordinates in requested frame"""
-        if isinstance(poi, str):
-            point = self.nodes[frame]['poi'][poi]['position']
+    def position(self, datum: str | np.ndarray, nodes: str | list[str], search: bool = False) -> np.ndarray: 
+        """Reports point of interest position through path of frames
+
+        :param datum: Datum label or coordinate 
+        :type datum: str | numpy.ndarray
+
+        :param nodes: Target node or path to target node
+        :type nodes: str | list[str]
+
+        :param search: Search for path between source and target frame, defaults to False
+        :type search: bool, optional
+
+        :return: Datum position coordinates in target frame
+        :rtype: numpy.ndarray
+        """
+        if isinstance(datum, str):
+            node = nodes if isinstance(nodes, str) else nodes[0]
+            point = self.nodes[node].datum[datum].position
         else:
-            point = poi
+            point = datum
 
-        if out_frame is None:
+        if isinstance(nodes, str):
             return point
         
-        for (frame_A, frame_B, direction) in self.get_path(frame, out_frame):
-            point = self.edges[frame_A, frame_B].transform(point, direction)
+        if search: 
+            path = self.get_path(nodes[0], nodes[-1])
+        else:
+            path = self.path(nodes)
+
+        for (frame_A, frame_B, orientation) in path:
+            point = self.edges[frame_A, frame_B].transform(point, orientation)
 
         return point
 
-    def direction(self, d: str | np.ndarray, frame: str, out_frame: str | None = None) -> np.ndarray:
-        """Reports direction in requested frame"""
-        if isinstance(d, str):
-            d = self.nodes[frame]['poi'][d]['position']
-
-        d = d / np.linalg.norm(d)
-
-        if out_frame is None:
-            return d
+    def direction(self, datum: str | np.ndarray, nodes: str | list[str], search: bool = False) -> np.ndarray:    
+        """Reports direction through path of frames
         
-        for (frame_A, frame_B, direction) in self.get_path(frame, out_frame):
-            d = self.edges[frame_A, frame_B].rotate(d, direction)
+        :param datum: Datum label or coordinate 
+        :type datum: str | numpy.ndarray
 
-        return d
+        :param nodes: Target node or path to target node
+        :type nodes: str | list[str]
 
+        :param search: Search for path between source and target frame, defaults to False
+        :type search: bool, optional
+
+        :return: Datum direction coordinates in target frame
+        :rtype: numpy.ndarray
+        """   
+        if isinstance(datum, str):
+            node = nodes if isinstance(nodes, str) else nodes[0]
+            direction = self.nodes[node].datum[datum].position
+        else:
+            direction = datum
+
+        direction = direction / np.linalg.norm(direction)
+
+        if isinstance(nodes, str):
+            return direction
+        
+        if search: 
+            path = self.get_path(nodes[0], nodes[-1])
+        else:
+            path = self.path(nodes)
+
+        for (frame_A, frame_B, orientation) in path:
+            direction = self.edges[frame_A, frame_B].rotate(direction, orientation)
+
+        return direction
+    
     def plot(self, ax: plt.Axes | None = None, frame: str | None = None, size: int = 1):
-        """3D plots of KinematicSystem"""
+        """3D plot of KinematicSystem
+
+        :param ax: Plotting axes, defaults to current axes
+        :type ax: matplotlib.pyplot.Axes | None, optional
+
+        :param frame: Reference frame to plot in, defaults to first node in graph
+        :type frame: str | None, optional
+
+        :param size: Quiver size, defaults to 1
+        :type size: int, optional
+        """
         # Default parameters
         ax = plt.gca() if ax is None else ax
         frame = list(self.nodes)[0] if frame is None else frame
 
         # Plot Cartesian frames
         for node in self.nodes():
-            O = self.coord('O', node, frame)
+            O = self.position('O', [node, frame], search=True)
             for i in range(3):
-                ax.quiver3D(*O, *(self.coord(f"E{i}", node, frame)-O),                              # type: ignore
-                    color=self.nodes[node]['color'], length=size, normalize=True)
+                ax.quiver(*O, *(self.position(f"E{i}", [node, frame], search=True)-O),                          
+                    color=self.nodes[node].color, length=size, normalize=True)
 
         ax.set_xlabel('X [mm]')
         ax.set_ylabel('Y [mm]')
-        ax.set_zlabel('Z [mm]')                                                                     # type: ignore
+        ax.set_zlabel('Z [mm]')                                                                     
         ax.set_aspect('equal')
 
-    def front_view_plot(self, ax: plt.Axes | None= None, frame: str | None = None):
-        """Plot cardinal front view of KinematicSystem"""
+    def front_view_plot(self, 
+                        ax: plt.Axes | None= None, 
+                        frame: str | None = None):
+        """Plot cardinal front view of KinematicSystem
+
+        :param ax: Plotting axes, defaults to current axes
+        :type ax: matplotlib.pyplot.Axes | None, optional
+
+        :param frame: Reference frame to plot in, defaults to first node in graph
+        :type frame: str | None, optional
+        """
         # Default parameters
         ax = plt.gca() if ax is None else ax
         frame = list(self.nodes)[0] if frame is None else frame
         
         # Plot Cartesian frames
-        label_map = {0: 'X', 1: 'Y', 2: 'Z'}
         plt.sca(ax)
 
         i = [1,2]
         for node in self.nodes():
-            O = self.coord('O', node, frame)
+            O = self.position('O', [node, frame], search=True)
             for ii in i:
-                E = self.coord(f"E{ii}", node, frame) - O
-                ax.quiver(*O[i], *E[i], color=self.nodes[node]['color'])
+                E = self.position(f"E{ii}", [node, frame], search=True) - O
+                ax.quiver(*O[i], *E[i], color=self.nodes[node].color)
 
         ax.set_title('Front View')
         ax.set_xlabel('Y [mm]')
         ax.set_ylabel('Z [mm]')                                                                
         ax.set_aspect('equal')
 
-    def three_view_plot(self, fig: plt.Figure | None= None, frame: str | None = None):
-        """Plot three cardinal views of KinematicSystem"""
-        # Default parameters
-        fig = plt.figure() if fig is None else fig
-        frame = list(self.nodes)[0] if frame is None else frame
-
-        axs = [fig.add_subplot(3,1,j+1) for j in range(3)]
-        axs[1].invert_xaxis()
-        
-        # Plot Cartesian frames
-        title_map = {0: 'Top', 1: 'Profile', 2: 'Front'}
-        label_map = {0: 'X', 1: 'Y', 2: 'Z'}
-        for j, ax in enumerate(axs):
-            plt.sca(ax)
-
-            i = [jj for jj in range(3) if jj != 2-j]
-            for node in self.nodes():
-                O = self.coord('O', node, frame)
-                for ii in i:
-                    E = self.coord(f"E{ii}", node, frame) - O
-                    ax.quiver(*O[i], *E[i], color=self.nodes[node]['color'])
-
-            ax.set_title(f"{title_map[j]} View")
-            ax.set_xlabel(f"{label_map[i[0]]} [mm]")
-            ax.set_ylabel(f"{label_map[i[1]]} [mm]")                                                                
-            ax.set_aspect('equal')
-
-        fig.tight_layout()
+    # def three_view_plot(self, fig: plt.Figure | None= None, frame: str | None = None):
+    #     """Plot three cardinal views of KinematicSystem"""
+    #     # Default parameters
+    #     fig = plt.figure() if fig is None else fig
+    #     frame = list(self.nodes)[0] if frame is None else frame
+    #
+    #     axs = [fig.add_subplot(3,1,j+1) for j in range(3)]
+    #     axs[1].invert_xaxis()
+    #   
+    #     # Plot Cartesian frames
+    #     title_map = {0: 'Top', 1: 'Profile', 2: 'Front'}
+    #     label_map = {0: 'X', 1: 'Y', 2: 'Z'}
+    #     for j, ax in enumerate(axs):
+    #         plt.sca(ax)
+    #
+    #         i = [jj for jj in range(3) if jj != 2-j]
+    #         for node in self.nodes():
+    #             O = self.position('O', node, frame)
+    #             for ii in i:
+    #                 E = self.position(f"E{ii}", node, frame) - O
+    #                 ax.quiver(*O[i], *E[i], color=self.nodes[node]['color'])
+    #
+    #         ax.set_title(f"{title_map[j]} View")
+    #         ax.set_xlabel(f"{label_map[i[0]]} [mm]")
+    #         ax.set_ylabel(f"{label_map[i[1]]} [mm]")                                                                
+    #         ax.set_aspect('equal')
+    #
+    #     fig.tight_layout()
