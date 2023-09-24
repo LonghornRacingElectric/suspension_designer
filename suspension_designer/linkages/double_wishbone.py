@@ -5,7 +5,7 @@ import numpy.typing as npt
 import numpy as np
 
 from scipy.optimize import fsolve, minimize
-from scipy.spatial.transform import Rotation
+import scipy.spatial.transform as sptl
 
 import matplotlib.pyplot as plt
 
@@ -27,7 +27,6 @@ class DoubleWishbone(KinematicSystem):
             ('LA','LB'), ('UA','UB'), ('TA','TB'),
             ('W','LB'),  ('W','UB'),  ('W','TB')])
 
-        
         if data is None:
             for node in ['LA', 'UA', 'TA']:
                 self.nodes[node].color = 'r'
@@ -142,10 +141,33 @@ class DoubleWishbone(KinematicSystem):
         self.edges['W',fB].rotation[0] = np.arctan2(dA[1], dA[2]) * 180/ np.pi
 
     def align_outboard_joints(self):
+        """Aligns all of the outboard ball joints"""
         self.align_outboard_joint('L')
         self.align_outboard_joint('U')
         self.align_outboard_joint('T')
 
+    def _kingpin_rotation(self) -> np.ndarray:
+        """Composes tire and wheel rotation matrices"""
+        rT = self.edges['I','T'].rotation.as_matrix()
+        rW = self.edges['T','W'].rotation.as_matrix()
+        return rW @ rT
+
+    def align_kingpin(self):
+        """Aligns kingpin axis"""
+        vKP_X = self.position('O', ['UB','UA','X','LA','LB'])
+        dKP_X = vKP_X / np.linalg.norm(vKP_X)
+
+        vKP_W = self.position('O', ['UB','W','LB'])
+        dKP_W = vKP_W / np.linalg.norm(vKP_W)
+    
+        rKP = vector_alignment_rotation(dKP_W, dKP_X).as_matrix()
+        r = rKP @ self._kingpin_rotation()
+        
+        aKP = sptl.Rotation.from_matrix(r).as_euler('ZYX', degrees=True)[::-1]
+
+        self.edges['I','T'].rotation[[0,2]] = aKP[[0,2]]
+        self.edges['T','W'].rotation[1] = aKP[1]
+        
     # Loop solvers
     def solve_a_arm_loop(self):
         """Positions upper A-arm to rectify the kinematic loop:
@@ -166,32 +188,23 @@ class DoubleWishbone(KinematicSystem):
         if not sol['success']:
             raise RuntimeError(sol['message'])
 
-        self.align_outboard_joint('L')
-        self.align_outboard_joint('U')
-
     def solve_tie_rod_loop(self):
         """Positions hub to rectify the kinematic loop:
         X -> LA -> LB -> W -> TB -> TA -> X
         """
-        # Kingpin alignment
+        # Compute static variables
         vKP = self.position('O', ['UB','UA','X','LA','LB'])
         dKP = vKP / np.linalg.norm(vKP)
 
-        vKP_W = self.position('O', ['UB','W','LB'])
-        dKP_W = vKP_W / np.linalg.norm(vKP_W)
-
-        R0 = vector_alignment_rotation(dKP_W, dKP)
-    
-        # Compute static variables
         pTA = self.position('O', ['TA','X','LA','LB'])
-        pTB = R0.apply(self.position('O', ['TB','W','LB']))
+        pTB = self.position('O', ['TB','W','LB'])
 
         lT = np.linalg.norm(self.position('O', ['TB','TA']))
         
         # Loop length residual minimization
         def residual(x: np.ndarray) -> float:
-            R1 = Rotation.from_rotvec(x * dKP, degrees=True)
-            p = R1.apply(pTB)
+            rT = sptl.Rotation.from_rotvec(x * dKP, degrees=True)
+            p = rT.apply(pTB)
 
             return (np.linalg.norm(p - pTA) - lT)**2
 
@@ -200,28 +213,23 @@ class DoubleWishbone(KinematicSystem):
             raise RuntimeError(sol['message'])
         
         # Position linkage
-        R1 = Rotation.from_rotvec(sol['x'] * dKP, degrees=True)
-        R  = Rotation.from_matrix(R1.as_matrix() @ R0.as_matrix())
-
-        vT = R.apply(pTB) - pTA
-
-        self.edges['X','TA']['rotation'][:] = 0
-
-        raise NotImplementedError
+        rT  = sptl.Rotation.from_rotvec(sol['x'] * dKP, degrees=True)
+        
+        vT = rT.apply(pTB) - pTA
     
-        dT = self.direction_path(vT, ['LB','LA','X','TA'])
-        self.edges['X','TA']['rotation'][2] = np.arctan(dT[0]/dT[1])
+        dT = self.position(vT, ['LB','LA','X','TA'])
+        self.edges['X','TA'].rotation[2] = np.arctan(dT[0]/dT[1])
 
-        dT = self.direction_path(vT, ['LB','LA','X','TA'])
-        self.edges['X','TA']['rotation'][0] = -np.arctan(dT[2]/dT[1])
+        dT = self.position(vT, ['LB','LA','X','TA'])
+        self.edges['X','TA'].rotation[0] = -np.arctan(dT[2]/dT[1])
 
         # Align wheel and tire
-        R_wheel = Rotation.from_matrix(R_KP.as_matrix() @ R.as_matrix())
-        a_wheel = R_wheel.as_euler('zyx')
+        rKP = self._kingpin_rotation()
+        r   = sptl.Rotation.from_matrix(rT.as_matrix() @ rKP)
+        a   = r.as_euler('ZYX', degrees=True)[::-1]
 
-        self.edges['I','T']['rotation'][2] = a_wheel[0]
-        self.edges['I','T']['rotation'][0] = a_wheel[1]
-        self.edges['T','W']['rotation'][1] = a_wheel[2]
+        self.edges['I','T'].rotation[[0,2]] = a[[0,2]]
+        self.edges['T','W'].rotation[1]     = a[1]
 
         # Position wheel
         pLB = self.position('O', ['LB','LA','X','B','I'])
@@ -231,8 +239,8 @@ class DoubleWishbone(KinematicSystem):
         vUB = pUB - pLB
         vTB = pTB - pLB
 
-        dUB = self.direction_path(vUB, ['I','T','W'])
-        dTB = self.direction_path(vTB, ['I','T','W'])
+        dUB = self.direction(vUB, ['I','T','W'])
+        dTB = self.direction(vTB, ['I','T','W'])
 
         pLB_w = self.position('O', ['LB','W'])
         pUB_w = self.position('O', ['UB','W'])
@@ -245,30 +253,33 @@ class DoubleWishbone(KinematicSystem):
         dTB_w = vTB_w / np.linalg.norm(vTB_w)
 
         _pause = True
- 
-    def place_wheel_frame(self):
-        raise NotImplementedError
     
     def solve_axle_kinematics(self):
         """Solves axle sweep configuration"""
         self.solve_a_arm_loop()
+        self.align_kingpin()
         self.solve_tie_rod_loop()
+
+        self.align_inboard_joint('T')
+        self.align_outboard_joints()
+
         self.place_wheel_frame()
 
     # Axle sweeps
     def jounce_sweep(self, I: tuple[float, float] = (-30, 30), n: int = 11):
         """Sweeps jounce by manipulating inboard lower A-arm joint angle"""
         # Compute lower A-arm joint angles
-        dz = np.linspace(I[0], I[0], n)
+        dz = np.array([0]) #np.linspace(I[0], I[1], n)
         
-        a0 = self.graph['static'].edges['X','LA']['rotation'][0]
-        l  = self.graph['static'].edges['LA','LB'].position[1]
-        da  = np.arcsin((dz + l*np.sin(a0))/l)
+        a0 = self.static.edges['X','LA'].rotation[0] * np.pi/180
+        l  = self.static.edges['LA','LB'].position[1]
+        da  = np.arcsin((dz + l*np.sin(a0))/l) * 180/np.pi
 
         # Loop configurations
         for a in da:
-            self.edges['X','LA']['rotation'][0] = a
+            self.edges['X','LA'].rotation[0] = a
             self.solve_axle_kinematics()
+            _pause = True
 
     def steer_sweep(self, I: tuple[float, float] = (-30, 30), n: int = 11):
         """Sweeps rack displacement to study steering behaviors"""
@@ -304,6 +315,9 @@ class DoubleWishbone(KinematicSystem):
 
         ax.plot(*self.position('RC', 'I'), 'kx')
         ax.plot(*self.position('PC', 'I'), 'kx')
+
+        ax.plot(*self.position('RIC', 'I'), 'ko')
+        ax.plot(*self.position('PIC', 'I'), 'ko')
 
         ax.plot(*np.vstack([T, self.position('RIC','I')]).T, 'k:')
         ax.plot(*np.vstack([T, self.position('PIC','I')]).T, 'k:')
@@ -389,7 +403,7 @@ class DoubleWishboneBuilder():
         """Place tire frame in desired static position based on targets"""
         self.linkage.edges['I','T'].position[0] = self.vehicle['wheelbase']*self.target['position']
         self.linkage.edges['I','T'].position[1] = self.target['track']/2
-        self.linkage.edges['I','T'].rotation[:] = [self.target['toe'], 0, self.target['camber']]
+        self.linkage.edges['I','T'].rotation[:] = [self.target['camber'], 0, self.target['toe']]
 
     def _place_wheel_frame(self):
         """Place wheel frame in desired static position based on targets"""
@@ -535,6 +549,9 @@ class DoubleWishboneBuilder():
         pRIC = self.linkage.position('RIC', 'I') 
         pPIC = self.linkage.position('PIC', 'I')
         
+        print(f"RIC: {pRIC}")
+        print(f"PIC: {pPIC}")
+
         for fA, fB in [['LA', 'LB'], ['UA', 'UB']]:
             # Place revolute joint
             pA = self.linkage.position('O', [fA,'X','B','I'])
@@ -549,14 +566,24 @@ class DoubleWishboneBuilder():
             elif fA[0] == 'U':
                 pLA = self.linkage.position('O', ['LA','X','B','I'])
                 pTA = self.linkage.position('O', ['TA','X','B','I'])
-                p3  = pLA + np.array([1,0,0])                                   #! TODO: Add swing
+                p3  = pLA + np.array([10,0,0])                                  #! TODO: Add swing
+
+                print(f"pLA: {pLA}")
+                print(f"pTA: {pTA}")
+                print(f"p3 : {p3}")
 
                 inboard_plane = Plane(pLA, pTA, p3)
                 pickup_line = arm_plane.intersection(inboard_plane)
+
+                print(f"pickup_line.point: {pickup_line.point}")
+                print(f"pickup_line.basis: {pickup_line.basis}")
             
             self.linkage.edges['X',fA].position = \
                 self.linkage.position(pickup_line.proj(pB), ['I','B','X'])
             
+            print(f"{fA} : {self.linkage.position('O', [fA,'X','B','I'])}")
+            print(f"{fB} : {pB}")
+
             # Align revolute joint
             dA = self.linkage.direction(pickup_line.basis, ['I','B','X',fA])
             self.linkage.edges['X',fA].rotation[2] = np.arctan2(dA[1], dA[0]) * 180/np.pi

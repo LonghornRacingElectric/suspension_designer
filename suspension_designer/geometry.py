@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import typing as typ
-from typing import Any
-from numpy._typing import NDArray
 import numpy.typing as npt
 
 import operator as op
@@ -162,7 +160,7 @@ class Plane():
         b1 = A[:,-1] + A[:,j]
 
         point_A = np.insert(np.linalg.solve(Ar, -b0), 0, 0)
-        point_B = np.insert(np.linalg.solve(Ar, -b1), 0, 100)
+        point_B = np.insert(np.linalg.solve(Ar, -b1), 0, 1)
 
         return Line(point_A, point_B)
     
@@ -262,6 +260,23 @@ class EulerRotation(np.ndarray):
         self._operator = sptl.Rotation.from_euler(
             self.sequence, self[self._index], self.degrees)
 
+    def _sync_operator(function: typ.Callable) -> typ.Any:
+        """Decorator to set operator if it is not synced
+        
+        :param function: Callable to be decorated
+        :type function: typing.Callable
+        
+        :return: Callable's return
+        :rtype: typing.Any
+        """
+        def decorator(*args, **kwargs):
+            self: EulerRotation = args[0]
+            if not self._operator_synced:
+                self._set_operator()
+            return function(*args, **kwargs)
+        return decorator
+
+    @_sync_operator
     def apply(self, vector: npt.ArrayLike) -> np.ndarray:
         """Applies forward rotation to input vector(s)
         
@@ -271,12 +286,10 @@ class EulerRotation(np.ndarray):
         
         :return: Rotated vectors with shape :math:`(n,3)`
         :rtype: numpy.ndarray
-        """
-        if not self._operator_synced:
-            self._set_operator()
-        
+        """        
         return self._operator.apply(vector)
     
+    @_sync_operator
     def inv(self, vector: npt.ArrayLike) -> np.ndarray:
         """Applies inverse rotation to input vector(s)
         
@@ -287,11 +300,17 @@ class EulerRotation(np.ndarray):
         :return: Inversely rotated vectors with shape :math:`(n,3)`
         :rtype: numpy.ndarray
         """
-        if not self._operator_synced:
-            self._set_operator()
-
         return self._operator.apply(vector, inverse=True)
 
+    @_sync_operator
+    def as_matrix(self) -> np.ndarray:
+        """Returns rotation matrix corresponding to rotation
+        
+        :return: Rotation matrix
+        :rtype: numpy.ndarray
+        """
+        return self._operator.as_matrix()
+    
 def vector_alignment_rotation(vector_A: np.ndarray, vector_B: np.ndarray) -> sptl.Rotation:
     """Provide a rotation matrix to align the first vector onto the second
     Reference: https://math.stackexchange.com/a/476311
