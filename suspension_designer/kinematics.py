@@ -183,7 +183,7 @@ class KinematicTransform(dict):
         :return: Point position vector in base frame
         :rtype: numpy.ndarray
         """
-        return self.rotation.inv(point) + self.position
+        return self.rotation.apply(point, inverse=True) + self.position
 
     def rotate(self, direction: npt.ArrayLike, orientation: str = 'f') -> np.ndarray:
         """Streamline kinematic affine transformations
@@ -202,45 +202,9 @@ class KinematicTransform(dict):
         if orientation in ['f', 'forward']:
             return self.rotation.apply(np.array(direction))
         elif orientation in ['r', 'i', 'reverse', 'inverse']:
-            return self.rotation.inv(np.array(direction))
+            return self.rotation.apply(np.array(direction), inverse=True)
         else:
             raise ValueError('Rotation orientation argument not valid') 
-
-    # def forward_rotation(self, vector: np.ndarray) -> np.ndarray:
-    #     """Apply sequence of rotations
-        
-    #     :param vector: Vector in base frame
-    #     :type vector: numpy.ndarray
-
-    #     :return: Vector in follower frame
-    #     :rtype: numpy.ndarray
-    #     """
-    #     if self.rotation.single:
-    #         return self.rotation.apply(vector)
-        
-    #     out = vector
-    #     for r in self.rotation:
-    #         out = r.apply(out)
-
-    #     return out
-
-    # def inverse_rotation(self, vector: np.ndarray) -> np.ndarray:
-    #     """Apply reversed sequence of inverse rotations
-        
-    #     :param vector: Vector in follower frame
-    #     :type vector: numpy.ndarray
-
-    #     :return: Vector in base frame
-    #     :rtype: numpy.ndarray
-    #     """
-    #     if self.rotation.single:
-    #         return self.rotation.apply(vector, inverse=True)
-        
-    #     out = vector
-    #     for r in reversed(self.rotation):
-    #         out = r.apply(out, inverse=True)
-
-    #     return out
      
 # %% Kinematic System
 class KinematicSystem(nx.DiGraph):

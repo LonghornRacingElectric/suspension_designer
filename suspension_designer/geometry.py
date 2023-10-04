@@ -1,4 +1,4 @@
-"""geometry.py - Geometry Utility Functions"""
+"""Geometry Utility Functions"""
 from __future__ import annotations
 
 import typing as typ
@@ -15,8 +15,8 @@ from suspension_designer.utilities import ordered_unique, sequence_to_index
 
 __all__ = ['lerp',                                  # interpolation
            'Line', 'Plane',                         # linear subspaces
-           'Rotation',
-           'vector_alignment_rotation',             # rotations
+           'EulerRotation',                         # rotations
+           'vector_alignment_rotation',             # "
            'skew_symmetric_cross_matrix']           # helpers
 
 # %% Interpolation
@@ -236,6 +236,8 @@ class EulerRotation(np.ndarray):
         corresponding operator."""
         super().__setitem__(key, value)
 
+        self._operator_synced = False
+
     sequence: str = property(op.attrgetter('_sequence'))
     
     @sequence.setter
@@ -247,9 +249,14 @@ class EulerRotation(np.ndarray):
         """
         self._index = sequence_to_index(value)
         self._sequence = value
+
+        self._operator_synced = False
     
     def __str__(self) -> str:
-        return f"EulerRotation([{self[0]}, {self[1]}, {self[2]}], {self.sequence}, degrees={self.degrees})"
+        return (
+            f"EulerRotation(" 
+            f"[{self[0]}, {self[1]}, {self[2]}], {self.sequence}, " 
+            f"degrees={self.degrees}, synced={self._operator_synced})")
     
     def __repr__(self) -> str:
         return str(self)
@@ -259,6 +266,8 @@ class EulerRotation(np.ndarray):
         rotation angles, sequence, and degree flag."""
         self._operator = sptl.Rotation.from_euler(
             self.sequence, self[self._index], self.degrees)
+        
+        self._operator_synced = True
 
     def _sync_operator(function: typ.Callable) -> typ.Any:
         """Decorator to set operator if it is not synced
@@ -277,30 +286,20 @@ class EulerRotation(np.ndarray):
         return decorator
 
     @_sync_operator
-    def apply(self, vector: npt.ArrayLike) -> np.ndarray:
+    def apply(self, vector: npt.ArrayLike, inverse: bool = False) -> np.ndarray:
         """Applies forward rotation to input vector(s)
         
         :param vector: Input vector(s) of shape :math:`(n,3)` where :math:`n` is
             the number of vectors to be rotated 
         :type vector: numpy.ndarray
         
+        :param inverse: Inverse rotation flag, defaults to :code:`False`
+        :type inverse: bool, optional
+        
         :return: Rotated vectors with shape :math:`(n,3)`
         :rtype: numpy.ndarray
         """        
-        return self._operator.apply(vector)
-    
-    @_sync_operator
-    def inv(self, vector: npt.ArrayLike) -> np.ndarray:
-        """Applies inverse rotation to input vector(s)
-        
-        :param vector: Input vector(s) of shape :math:`(n,3)` where :math:`n` is
-            the number of vectors to be rotated 
-        :type vector: numpy.ndarray
-        
-        :return: Inversely rotated vectors with shape :math:`(n,3)`
-        :rtype: numpy.ndarray
-        """
-        return self._operator.apply(vector, inverse=True)
+        return self._operator.apply(vector, inverse=inverse)
 
     @_sync_operator
     def as_matrix(self) -> np.ndarray:
