@@ -1,4 +1,4 @@
-"""suspension_designer.py - Automotive Multibody Kinematics Design Suite"""
+"""Automotive Multibody Kinematics Design Suite"""
 
 __author__ = "Blake Christierson"
 __contact__ = "bechristierson@sbcglobal.net"
