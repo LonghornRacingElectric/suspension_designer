@@ -10,8 +10,8 @@ import scipy.spatial.transform as sptl
 import matplotlib.pyplot as plt
 
 from suspension_designer.kinematics import datum_point_factory, KinematicSystem
-from suspension_designer.geometry   import lerp, Line, Plane, \
-                                           vector_alignment_angles
+from suspension_designer.geometry   import (
+    lerp, Line, Plane, vector_alignment_angles, vector_alignment_rotation)
 
 __all__ = ['DoubleWishbone', 'DoubleWishboneBuilder']
 
@@ -244,7 +244,7 @@ class DoubleWishbone(KinematicSystem):
             self.edges['I','T'].rotation[[0,2]] = a_KP[[0,2]]
             self.edges['T','W'].rotation[1] = a_KP[1]
         
-        def __solve_tie_rod_loop() -> self:
+        def __solve_tie_rod_loop() -> float:
             """Positions hub to rectify the kinematic loop:
                 X -> LA -> LB -> W -> TB -> TA -> X
             """
@@ -281,18 +281,14 @@ class DoubleWishbone(KinematicSystem):
             print(f"p_TB_T: {self.position('O', ['TB','W','T','I'])}")
 
         print("Initial")
-        print(self.edges['I','B'].rotation)
-        print(f"p_LB_X: {self.position('O', ['LB','LA'])}")
-
-        print(self.position([100,0,0], ['B','I']))
-        print(self.position([-100,0,0], ['B','I']))
-        print(self.edges['X','LA'].rotation)
+        print(f"R_LA: {self.edges['X','LA'].rotation}")
+        print(f"R_UA: {self.edges['X','UA'].rotation}")
         __print()
 
         __rotate_lower_a_arm(jounce)                # Adjusts inboard lower A-arm joint
         
         print("\n__rotate_lower_a_arm()")
-        print(self.edges['X','LA'].rotation)
+        print(f"R_LA: {self.edges['X','LA'].rotation}")
         __print()
 
         __translate_tie_rod(rack_displacement)
@@ -303,11 +299,18 @@ class DoubleWishbone(KinematicSystem):
         __solve_a_arm_loop()                        # Adjusts inboard upper A-arm joint
         
         print("\n__solve_a_arm_loop()")
+        print(f"R_UA: {self.edges['X','UA'].rotation}")
         __print()
 
-        # __align_kingpin()                           # Adjusts outboard lower A-arm joint
+        
+        __align_kingpin()                           # Adjusts outboard lower A-arm joint
+        
+        print("\n__align_kingpin()")
+        __print()
 
-        # kingpin_rotation = __solve_tie_rod_loop() 
+        a_KP = __solve_tie_rod_loop() 
+
+        raise NotImplementedError
 
     # Axle sweeps
     def jounce_sweep(self, jounce_limits: tuple[float, float] = (-30, 30), n: int = 11):

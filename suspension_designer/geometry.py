@@ -16,7 +16,9 @@ from suspension_designer.utilities import ordered_unique, sequence_to_index
 __all__ = ['lerp',                                  # interpolation
            'Line', 'Plane',                         # linear subspaces
            'EulerRotation',                         # rotations
-           'vector_alignment_angles']               # "
+           'vector_alignment_angles',               # "
+           'vector_alignment_rotation',             # "
+           'skew_symmetric_matrix']                 # "
 
 # %% Interpolation
 def lerp(point_A: np.ndarray, point_B: np.ndarray, alpha: float) -> np.ndarray:
@@ -355,3 +357,38 @@ def vector_alignment_angles(v1: np.ndarray, v2: np.ndarray,
     assert np.allclose([x1, y1, z1], [x2, y2, z2])
     
     return theta, phi
+
+def vector_alignment_rotation(v_A: np.ndarray, v_B: np.ndarray) -> sptl.Rotation:
+    """Provide a rotation matrix to align the first vector onto the second.
+    Adapted from https://math.stackexchange.com/a/476311
+
+    :param v_A: Misaligned vector
+    :type v_A: numpy.ndarray
+
+    :param v_B: Reference direction vector
+    :type v_B: numpy.ndarray
+
+    :return: Alignment rotation
+    :rtype: scipy.spatial.transform.Rotation
+    """
+    v = np.cross(v_A, v_B)
+    c = np.dot(v_A, v_B)
+         
+    v_skew = skew_symmetric_matrix(v)
+    R = np.eye(3) + v_skew + (v_skew @ v_skew) / (1 + c)
+    return sptl.Rotation.from_matrix(R)
+
+# %% Helpers
+def skew_symmetric_matrix(v: np.ndarray) -> np.ndarray:
+    r"""Creates skew symmetric cross-product matrix corresponding 
+    to vector in :math:`\mathbb{R}^3`
+
+    :param v: Input vector
+    :type v: numpy.ndarray
+
+    :return: Skew symmetric cross-product matrix
+    :rtype: numpy.ndarray
+    """
+    return np.array([[ 0   , -v[2],  v[1]],
+                     [ v[2],  0   , -v[0]],
+                     [-v[1],  v[0],  0   ]])
