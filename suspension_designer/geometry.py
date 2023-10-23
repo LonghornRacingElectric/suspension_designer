@@ -16,8 +16,7 @@ from suspension_designer.utilities import ordered_unique, sequence_to_index
 __all__ = ['lerp',                                  # interpolation
            'Line', 'Plane',                         # linear subspaces
            'EulerRotation',                         # rotations
-           'vector_alignment_rotation',             # "
-           'skew_symmetric_cross_matrix']           # helpers
+           'vector_alignment_angles']               # "
 
 # %% Interpolation
 def lerp(point_A: np.ndarray, point_B: np.ndarray, alpha: float) -> np.ndarray:
@@ -310,52 +309,49 @@ class EulerRotation(np.ndarray):
         """
         return self._operator.as_matrix()
     
-def vector_alignment_rotation(vector_A: np.ndarray, vector_B: np.ndarray) -> sptl.Rotation:
-    """Provide a rotation matrix to align the first vector onto the second
-    Reference: https://math.stackexchange.com/a/476311
+def vector_alignment_angles(v1: np.ndarray, v2: np.ndarray,
+                            sequence: str = 'ZX') -> tuple[float,float]:
+    """Provides two Euler angles that align a pair of provided 3-vectors.
+    Adapted from https://stackoverflow.com/a/67455855.
 
-    :param vector_A: Misaligned vector
-    :type vector_A: numpy.ndarray
+    :param v1: Initial vector
+    :type: v1: numpy.ndarray
 
-    :param vector_B: Reference direction vector
-    :type vector_B: numpy.ndarray
+    :param v2: Target vector
+    :type: v2: numpy.ndarray
 
-    :return: Alignment rotation
-    :rtype: scipy.spatial.transform.Rotation
+    :param sequence: Rotation sequence
+    :type sequence: str
+
+    :return: Pair of Euler angles for specified axes
+    :rtype: tuple[float, float]
     """
-    v = np.cross(vector_A, vector_B)
-    c = np.dot(vector_A, vector_B)
-         
-    v_skew = skew_symmetric_matrix(v)
-    R = np.eye(3) + v_skew + (v_skew @ v_skew) / (1 + c)
-    return sptl.Rotation.from_matrix(R)
+    # Append null axis
+    idx = sequence_to_index(sequence)
+    idx.append(*[i for i in range(3) if i not in idx])
+
+    r1 = np.linalg.norm(v1)
+    r2 = np.linalg.norm(v2)
+
+    z1, x1, y1 = v1[idx]             # initial vector
+    z2, x2, y2 = v2[idx] * (r1/r2)   # scaled target vector
+
+    # Elevation rotation
+    rho1 = np.sqrt(z1**2 + y1**2)
+    if(abs(z2 / rho1) > 1):
+        raise ValueError('Vectors can not be aligned with two Euler angles')
+    phi = np.arcsin(z2 / rho1) - np.arctan2(z1, y1);
+
+    y1, z1 = (y1 * np.cos(phi) - z1 * np.sin(phi), 
+              y1 * np.sin(phi) + z1 * np.cos(phi))
+    np.allclose(rho1, np.sqrt(z1**2 + y1**2))
+
+    # Azimuthal rotation
+    theta = np.arctan2(y2, x2) - np.arctan2(y1, x1)
+    x1, y1 = (x1 * np.cos(theta) - y1 * np.sin(theta), 
+              x1 * np.sin(theta) + y1 * np.cos(theta))
     
-def two_angle_vector_alignment_rotation(
-    direction: typ.Callable[[], np.ndarray], sequence: str = 'ZYX'):
-    """Used for two force members with ball-ball joints to align without
-    rotation along the free axis. The free axis should be the third in the sequence.
+    # Check alignment
+    assert np.allclose([x1, y1, z1], [x2, y2, z2])
     
-    :param sequence: Rotation sequence, defaults to 'ZYX' 
-    :type sequence: str, optional
-    
-    :param direction: Alignment point
-    :type direction: numpy.ndarray
-    """
-    index = sequence_to_index(sequence)
-
-    # for i in index[:-1]:
-
-# %% Helpers
-def skew_symmetric_matrix(v: np.ndarray) -> np.ndarray:
-    r"""Creates skew symmetric cross-product matrix corresponding 
-    to vector in :math:`\mathbb{R}^3`
-
-    :param v: Input vector
-    :type v: numpy.ndarray
-
-    :return: Skew symmetric cross-product matrix
-    :rtype: numpy.ndarray
-    """
-    return np.array([[ 0   , -v[2],  v[1]],
-                     [ v[2],  0   , -v[0]],
-                     [-v[1],  v[0],  0   ]])
+    return theta, phi

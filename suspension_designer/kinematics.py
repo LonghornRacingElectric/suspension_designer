@@ -105,7 +105,8 @@ class KinematicTransform(dict):
     def __init__(self, 
             position: npt.ArrayLike | None = None,  # Longitudinal (X), Lateral (Y), Vertical (Z)
             angle   : npt.ArrayLike | None = None,  # Roll (X), Pitch (Y), Yaw (Z)
-            sequence: str = 'ZYX', degrees: bool = True):
+            sequence: str = 'ZYX', 
+            degrees: bool = True):
         """Intialize KinematicTransform"""
         position = position if position is not None else np.zeros(3)
         angle    = angle    if angle    is not None else np.zeros(3)
@@ -215,10 +216,11 @@ class KinematicSystem(nx.DiGraph):
     def __init__(self, incoming_graph_data = None, **attr):
         """Initialize KinematicSystem"""
         super().__init__(incoming_graph_data, **attr)
+
         self._path: dict[tuple[str,str], list[tuple[str,str,str]]] = {}
 
     # Traversal
-    def get_path(self, source: str, target: str) -> list[tuple[str,str,str]]:
+    def _get_path(self, source: str, target: str) -> list[tuple[str,str,str]]:
         """Generates transform sequence between two coordinate frames
 
         :param source: Source node label
@@ -228,19 +230,23 @@ class KinematicSystem(nx.DiGraph):
         :type target: str
 
         :return: Shortest path between nodes as a list of tuples describing the 
-            transformations: (base, follower, orientation)
+            transformations in the form (base, follower, orientation), e.g.
+
+            .. code::
+
+                ('I','B','f')   # Intermediate to Body (Forward)
+
         :rtype: list[tuple[str,str,str]]
         """
-        if (source, target) in self._path.keys():
-            # Path previously cached
+        if (source, target) in self._path.keys():       # Path previously cached
             return self._path[(source, target)]
-        elif (target, source) in self._path.keys():
-            # Reverse path previously cached
+        
+        elif (target, source) in self._path.keys():     # Reverse path previously cached
             self._path[(source, target)] = []
             for e in reversed(self._path[(target, source)]):
                 o = 'r' if e[2] in ['f', 'forward'] else 'f'
                 self._path[(source, target)].append((e[0], e[1], o))
-    
+
             return self._path[(source, target)]
        
         # Path not previously cached
@@ -272,13 +278,13 @@ class KinematicSystem(nx.DiGraph):
                 path.append((nodes[j+1], nodes[j], 'reverse'))
             else:
                 if search:
-                    path += self.get_path(nodes[j], nodes[j+1])
+                    path += self._get_path(nodes[j], nodes[j+1])
                 else:
                     raise KeyError("Edge ({},{}) is not present".format(nodes[j], nodes[j+1]))
 
         return path
 
-    def loops(self, subgraph: list[str] = None) -> list:                                            # TODO: check return type
+    def loops(self, subgraph: list[str] | None = None) -> list:                                            # TODO: check return type
         """Generates a directed minimum loop basis for a subgraph
 
         :param subgraph: List of node labels comprising a subgraph, defaults to None
@@ -325,7 +331,7 @@ class KinematicSystem(nx.DiGraph):
             return point
         
         if search: 
-            path = self.get_path(nodes[0], nodes[-1])
+            path = self._get_path(nodes[0], nodes[-1])
         else:
             path = self.path(nodes)
 
@@ -361,7 +367,7 @@ class KinematicSystem(nx.DiGraph):
             return direction
         
         if search: 
-            path = self.get_path(nodes[0], nodes[-1])
+            path = self._get_path(nodes[0], nodes[-1])
         else:
             path = self.path(nodes)
 
