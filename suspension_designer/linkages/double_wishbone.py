@@ -224,52 +224,56 @@ class DoubleWishbone(KinematicSystem):
 
     # Axle sweeps
     def jounce_sweep(self, limits: tuple[float, float] = (-30, 30), n: int = 7) \
-            -> dict[float, DoubleWishbone]:
+            -> tuple[np.ndarray[float], np.ndarray[DoubleWishbone]]:
         """Sweeps jounce by manipulating inboard lower A-arm joint angle"""
-        sweep: dict[float, DoubleWishbone] = {}
-        for jounce in np.linspace(*limits, n):
+        jounces = np.linspace(*limits, n)
+        sweep = np.empty(jounces.shape, dtype=DoubleWishbone)
+        for i, jounce in enumerate(jounces):
             self.solve_axle_kinematics(jounce, 0)
-            sweep[jounce] = deepcopy(self)
+            sweep[i] = deepcopy(self)
 
-        return sweep
+        return jounces, sweep
 
-    def steer_sweep(self, limits: tuple[float, float] = (-30, 30), n: int = 7,
-                    jounce: float = 0) -> dict[float, DoubleWishbone]:
+    def steer_sweep(self, limits: tuple[float, float] = (-30, 30), 
+                    n: int = 7, jounce: float = 0) \
+            -> tuple[np.ndarray[float], np.ndarray[DoubleWishbone]]:
         """Sweeps rack displacement to study steering behaviors"""
+        n_half = int(np.ceil(n/2))
+        rack_displacements = np.unique(np.hstack(
+            [0, np.linspace(0, limits[1], n_half)[1:], np.linspace(0, limits[0], n_half)[1:]]))
+        
+        sweep = np.empty(rack_displacements.shape, dtype=DoubleWishbone)
+
         # Solve neutral steer
+        neutral_idx = np.flatnonzero(rack_displacements==0)[0]
         self.solve_axle_kinematics(jounce, 0)
-        sweep = {0: deepcopy(self)}
+        sweep[neutral_idx] = deepcopy(self)
 
         # Solve left steers
-        n_half = int(np.ceil(n/2))
-        for rack_displacement in np.linspace(0, limits[1], n_half)[1:]:
+        for i, rack_displacement in filter(lambda e: e[1] > 0, enumerate(rack_displacements)):
             self.solve_axle_kinematics(jounce, rack_displacement)
-            sweep[rack_displacement] = deepcopy(self)
+            sweep[i] = deepcopy(self)
 
         # Solve right steers
-        self = deepcopy(sweep[0])
-        for rack_displacement in np.linspace(0, limits[0], n_half)[1:]:
+        self = deepcopy(sweep[neutral_idx])
+        for i, rack_displacement in filter(lambda e: e[1] < 0, enumerate(rack_displacements)):
             self.solve_axle_kinematics(jounce, rack_displacement)
-            sweep[rack_displacement] = deepcopy(self)
+            sweep[i] = deepcopy(self)
             
-        return sweep
+        return rack_displacements, sweep
 
     def motion_sweep(self,
                      jounce_limits: tuple[float, float] = (-30, 30),
                      rack_limits: tuple[float, float] = (-30, 30),
                      n: tuple(int, int) = (7,7)) \
-                    -> dict[(float, float), DoubleWishbone]:
-        sweep: dict[float, dict[float, DoubleWishbone]] = {}
-        for jounce in np.linspace(*jounce_limits, n[0]):
-            sweep[jounce] = self.steer_sweep(rack_limits, n[1], jounce)
+            -> tuple[np.ndarray[float], np.ndarray[float], np.ndarray[DoubleWishbone]]:
+        jounces = np.linspace(*jounce_limits, n[0])
+        sweep = np.empty((n[0],int(2*np.floor((n[1]-1)/2)+1)), dtype=DoubleWishbone)
+        for i, jounce in enumerate(jounces):
+            steers, sweep[i] = self.steer_sweep(rack_limits, n[1], jounce)
     
-        # Reformat sweep
-        resweep = {}
-        for jounce, steer_sweep in sweep.items():
-            for rack_displacement, result in steer_sweep.items():
-                resweep[(jounce, rack_displacement)] = result
-        
-        return resweep
+        steers, jounces = np.meshgrid(steers, jounces)
+        return jounces, steers, sweep
     
     # Plotting
     def plot(self, ax: plt.axes = None):
