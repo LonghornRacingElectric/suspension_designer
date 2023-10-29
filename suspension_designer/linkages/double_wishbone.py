@@ -1,11 +1,12 @@
 """double_wishbone.py - Double Wishbone Linkage"""
+from __future__ import annotations
+
 from copy import deepcopy
 
 import numpy.typing as npt
 import numpy as np
 
 from scipy.optimize import fsolve, minimize
-import scipy.spatial.transform as sptl
 
 import matplotlib.pyplot as plt
 
@@ -100,7 +101,7 @@ class DoubleWishbone(KinematicSystem):
         """Computes inboard misalignment angle of the tie rod relative to the 
         lateral steering rack. Important for bending loads onto the inboard
         steering system."""
-        p_TB = self.position('O', ['TB','W','T','I','B','X','TB'])
+        p_TB = self.position('O', ['TB','W','T','I','B','X','TA'])
         return np.arccos(p_TB[1] / np.linalg.norm(p_TB))
     
     def steering_leverage(self) -> np.ndarray:
@@ -117,9 +118,14 @@ class DoubleWishbone(KinematicSystem):
         """
         f_A, f_B = f'{key}A', f'{key}B'
 
+        if key == 'T':
+            self.edges['X',f_A].rotation[[0,2]] = [0,0]
+        else:
+            self.edges['X',f_A].rotation[0] = 0
+
         d_B = self.position('O', [f_B,'W','T','I','B','X',f_A])
         if key == 'T':
-            psi, phi = vector_alignment_angles(np.array([0,1,0]), d_B, 'ZX')
+            psi, phi = vector_alignment_angles(d_B, np.array([0,1,0]), 'ZX')
 
             self.edges['X',f_A].rotation[0] = phi * 180/np.pi
             self.edges['X',f_A].rotation[2] = psi * 180/np.pi
@@ -136,6 +142,7 @@ class DoubleWishbone(KinematicSystem):
         """
         f_A, f_B = f'{key}A', f'{key}B'
 
+        self.edges['W',f_B].rotation[:] = [0,0,0] 
         d_A = self.direction('E2', [f_A,'X','B','I','T','W',f_B])
         theta, phi = vector_alignment_angles(np.array([0,0,1]), d_A, 'YX')
 
@@ -147,183 +154,96 @@ class DoubleWishbone(KinematicSystem):
         self._align_outboard_joint('L')
         self._align_outboard_joint('U')
         self._align_outboard_joint('T')
-
-    def _kingpin_rotation(self) -> np.ndarray:
-        """Composes tire and wheel rotation matrices"""
-        R_T = self.edges['I','T'].rotation.as_matrix()
-        R_W = self.edges['T','W'].rotation.as_matrix()
-        return R_W @ R_T
-        
-    # def solve_tie_rod_loop(self):
-    #     # Position linkage
-    #     rT  = sptl.Rotation.from_rotvec(sol['x'] * dKP, degrees=True)
-    #     vT = rT.apply(p_TB) - p_TA
-    
-    #     dT = self.position(vT, ['LB','LA','X','TA'])
-    #     self.edges['X','TA'].rotation[2] = np.arctan(dT[0]/dT[1])
-
-    #     dT = self.position(vT, ['LB','LA','X','TA'])
-    #     self.edges['X','TA'].rotation[0] = -np.arctan(dT[2]/dT[1])
-
-    #     # Align wheel and tire
-    #     rKP = self._kingpin_rotation()
-    #     r   = sptl.Rotation.from_matrix(rT.as_matrix() @ rKP)
-    #     a   = r.as_euler('ZYX', degrees=True)[::-1]
-
-    #     self.edges['I','T'].rotation[[0,2]] = a[[0,2]]
-    #     self.edges['T','W'].rotation[1]     = a[1]
-
-    #     # Position wheel
-    #     pLB = self.position('O', ['LB','LA','X','B','I'])
-    #     pUB = self.position('O', ['UB','UA','X','B','I'])
-    #     p_TB = self.position('O', ['TB','TA','X','B','I'])
-
-    #     vUB = pUB - pLB
-    #     vTB = p_TB - pLB
-
-    #     dUB = self.direction(vUB, ['I','T','W'])
-    #     dTB = self.direction(vTB, ['I','T','W'])
-
-    #     pLB_w = self.position('O', ['LB','W'])
-    #     pUB_w = self.position('O', ['UB','W'])
-    #     p_TB_w = self.position('O', ['TB','W'])
-
-    #     vUB_w = pUB_w - pLB_w
-    #     vTB_w = p_TB_w - pLB_w
-
-    #     dUB_w = vUB_w / np.linalg.norm(vUB_w)
-    #     dTB_w = vTB_w / np.linalg.norm(vTB_w)
-
-    #     _pause = True
     
     def solve_axle_kinematics(self, jounce: float, rack_displacement: float):
         """Solves axle sweep configuration"""
-        def __rotate_lower_a_arm(jounce: float):
-            """Rotates inboard lower A-arm revolute joint"""
-            a_LA = self.static.edges['X','LA'].rotation[0] * np.pi/180
-            l_LA = self.static.edges['LA','LB'].position[1]
+        # Rotate lower A-arm
+        a_LA = self.static.edges['X','LA'].rotation[0] * np.pi/180
+        l_LA = self.static.edges['LA','LB'].position[1]
 
-            self.edges['X','LA'].rotation[0] = \
-                np.arcsin((jounce + l_LA*np.sin(a_LA)) / l_LA) * 180/np.pi
+        self.edges['X','LA'].rotation[0] = \
+            np.arcsin((jounce + l_LA*np.sin(a_LA)) / l_LA) * 180/np.pi
+
+        # Translate tie rod
+        y_TA = self.static.edges['X','TA'].position[1] 
+        self.edges['X','TA'].position[1] = y_TA + rack_displacement
+
+        # Solve kinematic loops
+        p_LB_X = self.position('O', ['LB','LA','X','B','I'])
+
+        def __loop_residual(x: np.ndarray) -> float:
+            # Set configuration
+            self.edges['X','UA'].rotation[0] = x[0]
+            self.edges['X','TA'].rotation[[0,2]] = x[[1,2]]
+            self.edges['I','T'].position[:] = x[[3,4,5]]
+            self.edges['I','T'].rotation[[0,2]] = x[[6,7]]
+            self.edges['T','W'].rotation[1] = x[8]
+
+            # Compute outboard pickup path positions
+            p_LB_W = self.position('O', ['LB','W','T','I'])
+
+            p_UB_X = self.position('O', ['UB','UA','X','B','I'])
+            p_UB_W = self.position('O', ['UB','W','T','I'])
+
+            p_TB_X = self.position('O', ['TB','TA','X','B','I'])
+            p_TB_W = self.position('O', ['TB','W','T','I'])
+
+            # Compute stacked loop residual
+            p_X = np.concatenate([p_LB_X, p_UB_X, p_TB_X])
+            p_W = np.concatenate([p_LB_W, p_UB_W, p_TB_W])
+
+            return np.linalg.norm(p_X - p_W)
         
-        def __translate_tie_rod(rack_displacement: float):
-            """Laterally translates inboard tie rod pickup"""
-            y_TA = self.static.edges['X','TA'].position[1] 
-            self.edges['X','TA'].position[1] = y_TA + rack_displacement
+        sol = minimize(__loop_residual, x0=np.hstack([
+            self.edges['X','UA'].rotation[0],
+            *[self.edges['X','TA'].rotation[j] for j in [0,2]],
+            self.edges['I','T'].position,
+            *[self.edges['I','T'].rotation[j] for j in [0,2]],
+            self.edges['T','W'].rotation[1]]))
         
-        def __solve_a_arm_loop():
-            """Positions upper A-arm to rectify the kinematic loop:
-                X -> LA -> LB -> W -> UB -> UA -> X
-            """
-            p_LB = self.position('O', ['LB','LA'])
-            l_W  = np.linalg.norm(self.position('O', ['UB','W','LB']))
+        if not sol['success']:
+            if sol['message'] == 'Desired error not necessarily achieved due to precision loss.':
+                # Compute outboard pickup path positions
+                p_LB_W = self.position('O', ['LB','W','T','I'])
+
+                p_UB_X = self.position('O', ['UB','UA','X','B','I'])
+                p_UB_W = self.position('O', ['UB','W','T','I'])
+
+                p_TB_X = self.position('O', ['TB','TA','X','B','I'])
+                p_TB_W = self.position('O', ['TB','W','T','I'])
+
+                # Compute stacked loop residual
+                p_X = np.concatenate([p_LB_X, p_UB_X, p_TB_X])
+                p_W = np.concatenate([p_LB_W, p_UB_W, p_TB_W])
             
-            def residual(x: float) -> float:
-                self.edges['X','UA'].rotation[0] = x                                
-                p_UB = self.position('O', ['UB','UA','X','LA'])
+                if np.max(np.abs(p_X - p_W)) < 1e-4:
+                    return
 
-                return (np.linalg.norm(p_UB - p_LB) - l_W)**2
-
-            sol = minimize(residual, x0=self.edges['X','UA'].rotation[0])
-            if not sol['success']:
-                raise RuntimeError(sol['message'])
+            raise RuntimeError(sol['message'])
         
-        def __align_kingpin():
-            """Aligns kingpin axis"""
-            v_KP_X = self.position('O', ['UB','UA','X','LA','LB'])
-            d_KP_X = v_KP_X / np.linalg.norm(v_KP_X)
-
-            v_KP_W = self.position('O', ['UB','W','LB'])
-            d_KP_W = v_KP_W / np.linalg.norm(v_KP_W)
-        
-            R_KP = vector_alignment_rotation(d_KP_W, d_KP_X).as_matrix()
-            R = R_KP @ self._kingpin_rotation()
-            
-            a_KP = sptl.Rotation.from_matrix(R).as_euler('ZYX', degrees=True)[::-1]
-
-            self.edges['I','T'].rotation[[0,2]] = a_KP[[0,2]]
-            self.edges['T','W'].rotation[1] = a_KP[1]
-        
-        def __solve_tie_rod_loop() -> float:
-            """Positions hub to rectify the kinematic loop:
-                X -> LA -> LB -> W -> TB -> TA -> X
-            """
-            # Compute static variables
-            v_KP = self.position('O', ['UB','UA','X','LA','LB'])
-            d_KP = v_KP / np.linalg.norm(v_KP)
-
-            p_TA = self.position('O', ['TA','X','LA','LB'])
-            p_TB = self.position('O', ['TB','W','LB'])
-
-            l_T = np.linalg.norm(self.position('O', ['TB','TA']))
-            
-            # Loop length residual minimization
-            def residual(x: np.ndarray) -> float:
-                R_T = sptl.Rotation.from_rotvec(x * d_KP, degrees=True)
-                p = R_T.apply(p_TB)
-
-                return (np.linalg.norm(p - p_TA) - l_T)**2
-
-            sol = minimize(residual, x0=0)
-            if not sol['success']:
-                raise RuntimeError(sol['message'])
-            
-            return sol['x']
-        
-        def __print():
-            print(f"p_LB_X: {self.position('O', ['LB','LA','X','B','I'])}")
-            print(f"p_LB_T: {self.position('O', ['LB','W','T','I'])}")
-
-            print(f"p_UB_X: {self.position('O', ['UB','UA','X','B','I'])}")
-            print(f"p_UB_T: {self.position('O', ['UB','W','T','I'])}")
-
-            print(f"p_TB_X: {self.position('O', ['TB','TA','X','B','I'])}")
-            print(f"p_TB_T: {self.position('O', ['TB','W','T','I'])}")
-
-        print("Initial")
-        print(f"R_LA: {self.edges['X','LA'].rotation}")
-        print(f"R_UA: {self.edges['X','UA'].rotation}")
-        __print()
-
-        __rotate_lower_a_arm(jounce)                # Adjusts inboard lower A-arm joint
-        
-        print("\n__rotate_lower_a_arm()")
-        print(f"R_LA: {self.edges['X','LA'].rotation}")
-        __print()
-
-        __translate_tie_rod(rack_displacement)
-        
-        # print("\n__translate_tie_rod()")
-        # __print()
-        
-        __solve_a_arm_loop()                        # Adjusts inboard upper A-arm joint
-        
-        print("\n__solve_a_arm_loop()")
-        print(f"R_UA: {self.edges['X','UA'].rotation}")
-        __print()
-
-        
-        __align_kingpin()                           # Adjusts outboard lower A-arm joint
-        
-        print("\n__align_kingpin()")
-        __print()
-
-        a_KP = __solve_tie_rod_loop() 
-
-        raise NotImplementedError
+        # Align outboard joints
+        self._align_outboard_joints()
 
     # Axle sweeps
-    def jounce_sweep(self, jounce_limits: tuple[float, float] = (-30, 30), n: int = 11):
+    def jounce_sweep(self, limits: tuple[float, float] = (-30, 30), n: int = 11) \
+            -> dict[float, DoubleWishbone]:
         """Sweeps jounce by manipulating inboard lower A-arm joint angle"""
-        for jounce in np.linspace(*jounce_limits, n):
+        sweep: dict[float, DoubleWishbone] = {}
+        for jounce in np.linspace(*limits, n):
             self.solve_axle_kinematics(jounce, 0)
-            _pause = True
+            sweep[jounce] = deepcopy(self)
 
-    def steer_sweep(self, rack_limits: tuple[float, float] = (-30, 30), n: int = 11):
+        return sweep
+
+    def steer_sweep(self, limits: tuple[float, float] = (-30, 30), n: int = 11) \
+            -> dict[float, DoubleWishbone]:
         """Sweeps rack displacement to study steering behaviors"""
-        for rack_displacement in np.linspace(*rack_limits, n):
+        sweep: dict[float, DoubleWishbone] = {}
+        for rack_displacement in np.linspace(*limits, n):
             self.solve_axle_kinematics(0, rack_displacement)
-            _pause = True
+            sweep[rack_displacement] = deepcopy(self)
+
+        return sweep
 
     # Plotting
     def plot(self, ax: plt.axes = None):
@@ -443,17 +363,17 @@ class DoubleWishboneBuilder():
         """Place tire frame in desired static position based on targets"""
         self.linkage.edges['I','T'].position[0] = self.vehicle['wheelbase']*self.target['position']
         self.linkage.edges['I','T'].position[1] = self.target['track']/2
-        self.linkage.edges['I','T'].rotation[:] = [self.target['camber'], 0, self.target['toe']]
+        self.linkage.edges['I','T'].rotation[[0,2]] = [-self.target['camber'], self.target['toe']]
 
     def _place_wheel_frame(self):
         """Place wheel frame in desired static position based on targets"""
         self.linkage.edges['T','W'].position[2] = self.vehicle['loaded_radius']
-        self.linkage.edges['T','W'].rotation[:] = [0, self.target['caster'], 0]
+        self.linkage.edges['T','W'].rotation[1] = self.target['caster']
 
     def _place_body_frame(self):
         """Place body frame in desired static position based on targets"""
         self.linkage.edges['I','B'].position[2] = self.vehicle['cg_height']
-        self.linkage.edges['I','B'].rotation[:] = [0, -self.vehicle['rake'], 0]
+        self.linkage.edges['I','B'].rotation[1] = -self.vehicle['rake']
 
     def _place_axle_frame(self):
         """Place axle frame in desired static position based on targets"""
@@ -471,8 +391,8 @@ class DoubleWishboneBuilder():
         self._compute_centers()                         # compute (instant) centers
         self._place_tie_rod_inboard_frame()             # configure tie-rod 
         self._place_A_arm_inboard_frames()              # configure A-arms
-        self.linkage._align_outboard_joints()           # rotate outboard ball joints
 
+        self.linkage._align_outboard_joints()           # rotate outboard ball joints
         self.linkage.set_static_config()                # set design configuration
 
     def _sample_design(self, design: npt.ArrayLike):
@@ -482,8 +402,8 @@ class DoubleWishboneBuilder():
             [0, 1,2]: x,y,z coordinates of outboard lower A-arm
             [3,   4]: x,  z coordinates of outboard upper A-arm
             [5, 6,7]: x,y,z coordinates of outboard tie rod 
-            [     8]:   y   coordinate  of inboard  lower A-arm
-            [9,10  ]: x,y   coordinates of inboard  tie rod  
+            [   8  ]:   y   coordinate  of inboard lower A-arm
+            [9,10  ]: x,y   coordinates of inboard tie rod  
         :type design: numpy.ndarray
         """
         def __lerp_bound(f_B: str, f_F: str, j: int, t: float):
@@ -505,7 +425,7 @@ class DoubleWishboneBuilder():
                 lerp(self.bound[f_F][j,0], self.bound[f_F][j,1], t)
         
         for j,i in zip([0,1,2], [0,1,2]): __lerp_bound('W', 'LB', j, design[i])
-        for j,i in zip([0,2]  , [3,4]  ): __lerp_bound('W', 'UB', j, design[i])
+        for j,i in zip([0,  2], [3,  4]): __lerp_bound('W', 'UB', j, design[i])
         for j,i in zip([0,1,2], [5,6,7]): __lerp_bound('W', 'TB', j, design[i])
         
         __lerp_bound('X', 'LA', 1, design[8])
@@ -622,7 +542,6 @@ class DoubleWishboneBuilder():
         p_PIC = self.linkage.position('PIC', 'I')
 
         for f_A, f_B in [['LA', 'LB'], ['UA', 'UB']]:
-            # Place revolute joint
             p_A = self.linkage.position('O', [f_A,'X','B','I'])
             p_B = self.linkage.position('O', [f_B,'W','T','I'])
             
