@@ -157,29 +157,25 @@ class DoubleWishbone(KinematicSystem):
     
     def solve_axle_kinematics(self, jounce: float, rack_displacement: float):
         """Solves axle sweep configuration"""
-        # Rotate lower A-arm
-        a_LA = self.static.edges['X','LA'].rotation[0] * np.pi/180
-        l_LA = self.static.edges['LA','LB'].position[1]
-
-        self.edges['X','LA'].rotation[0] = \
-            np.arcsin((jounce + l_LA*np.sin(a_LA)) / l_LA) * 180/np.pi
+        # Translate tire
+        self.edges['I','T'].position[2] = jounce
 
         # Translate tie rod
         y_TA = self.static.edges['X','TA'].position[1] 
         self.edges['X','TA'].position[1] = y_TA + rack_displacement
 
         # Solve kinematic loops
-        p_LB_X = self.position('O', ['LB','LA','X','B','I'])
-
         def __loop_residual(x: np.ndarray) -> float:
             # Set configuration
-            self.edges['X','UA'].rotation[0] = x[0]
-            self.edges['X','TA'].rotation[[0,2]] = x[[1,2]]
-            self.edges['I','T'].position[:] = x[[3,4,5]]
+            self.edges['X','LA'].rotation[0] = x[0]
+            self.edges['X','UA'].rotation[0] = x[1]
+            self.edges['X','TA'].rotation[[0,2]] = x[[2,3]]
+            self.edges['I','T'].position[[0,1]] = x[[4,5]]
             self.edges['I','T'].rotation[[0,2]] = x[[6,7]]
             self.edges['T','W'].rotation[1] = x[8]
 
             # Compute outboard pickup path positions
+            p_LB_X = self.position('O', ['LB','LA','X','B','I'])
             p_LB_W = self.position('O', ['LB','W','T','I'])
 
             p_UB_X = self.position('O', ['UB','UA','X','B','I'])
@@ -195,15 +191,17 @@ class DoubleWishbone(KinematicSystem):
             return np.linalg.norm(p_X - p_W)
         
         sol = minimize(__loop_residual, x0=np.hstack([
+            self.edges['X','LA'].rotation[0],
             self.edges['X','UA'].rotation[0],
             *[self.edges['X','TA'].rotation[j] for j in [0,2]],
-            self.edges['I','T'].position,
+            self.edges['I','T'].position[[0,1]],
             *[self.edges['I','T'].rotation[j] for j in [0,2]],
             self.edges['T','W'].rotation[1]]))
         
         if not sol['success']:
             if sol['message'] == 'Desired error not necessarily achieved due to precision loss.':
                 # Compute outboard pickup path positions
+                p_LB_X = self.position('O', ['LB','LA','X','B','I'])
                 p_LB_W = self.position('O', ['LB','W','T','I'])
 
                 p_UB_X = self.position('O', ['UB','UA','X','B','I'])
@@ -363,7 +361,7 @@ class DoubleWishboneBuilder():
         """Place tire frame in desired static position based on targets"""
         self.linkage.edges['I','T'].position[0] = self.vehicle['wheelbase']*self.target['position']
         self.linkage.edges['I','T'].position[1] = self.target['track']/2
-        self.linkage.edges['I','T'].rotation[[0,2]] = [-self.target['camber'], self.target['toe']]
+        self.linkage.edges['I','T'].rotation[[0,2]] = [self.target['camber'], self.target['toe']]
 
     def _place_wheel_frame(self):
         """Place wheel frame in desired static position based on targets"""
