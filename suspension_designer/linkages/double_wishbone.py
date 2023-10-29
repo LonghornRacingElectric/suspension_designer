@@ -223,7 +223,7 @@ class DoubleWishbone(KinematicSystem):
         self._align_outboard_joints()
 
     # Axle sweeps
-    def jounce_sweep(self, limits: tuple[float, float] = (-30, 30), n: int = 11) \
+    def jounce_sweep(self, limits: tuple[float, float] = (-30, 30), n: int = 7) \
             -> dict[float, DoubleWishbone]:
         """Sweeps jounce by manipulating inboard lower A-arm joint angle"""
         sweep: dict[float, DoubleWishbone] = {}
@@ -233,16 +233,44 @@ class DoubleWishbone(KinematicSystem):
 
         return sweep
 
-    def steer_sweep(self, limits: tuple[float, float] = (-30, 30), n: int = 11) \
-            -> dict[float, DoubleWishbone]:
+    def steer_sweep(self, limits: tuple[float, float] = (-30, 30), n: int = 7,
+                    jounce: float = 0) -> dict[float, DoubleWishbone]:
         """Sweeps rack displacement to study steering behaviors"""
-        sweep: dict[float, DoubleWishbone] = {}
-        for rack_displacement in np.linspace(*limits, n):
-            self.solve_axle_kinematics(0, rack_displacement)
+        # Solve neutral steer
+        self.solve_axle_kinematics(jounce, 0)
+        sweep = {0: deepcopy(self)}
+
+        # Solve left steers
+        n_half = int(np.ceil(n/2))
+        for rack_displacement in np.linspace(0, limits[1], n_half)[1:]:
+            self.solve_axle_kinematics(jounce, rack_displacement)
             sweep[rack_displacement] = deepcopy(self)
 
+        # Solve right steers
+        self = deepcopy(sweep[0])
+        for rack_displacement in np.linspace(0, limits[0], n_half)[1:]:
+            self.solve_axle_kinematics(jounce, rack_displacement)
+            sweep[rack_displacement] = deepcopy(self)
+            
         return sweep
 
+    def motion_sweep(self,
+                     jounce_limits: tuple[float, float] = (-30, 30),
+                     rack_limits: tuple[float, float] = (-30, 30),
+                     n: tuple(int, int) = (7,7)) \
+                    -> dict[(float, float), DoubleWishbone]:
+        sweep: dict[float, dict[float, DoubleWishbone]] = {}
+        for jounce in np.linspace(*jounce_limits, n[0]):
+            sweep[jounce] = self.steer_sweep(rack_limits, n[1], jounce)
+    
+        # Reformat sweep
+        resweep = {}
+        for jounce, steer_sweep in sweep.items():
+            for rack_displacement, result in steer_sweep.items():
+                resweep[(jounce, rack_displacement)] = result
+        
+        return resweep
+    
     # Plotting
     def plot(self, ax: plt.axes = None):
         """Plot DoubleWishbone system"""
