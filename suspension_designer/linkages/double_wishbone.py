@@ -36,8 +36,9 @@ class DoubleWishbone(KinematicSystem):
                 self.nodes[node].color = 'b'
 
             return
-            
-        raise NotImplementedError                                               #! TODO: assign positional data  
+        
+        #! TODO: assign data from dict into object 
+        raise NotImplementedError                                                
         
     def set_static_config(self):
         """Create a deep copy of current state as a graph attribute"""
@@ -58,13 +59,13 @@ class DoubleWishbone(KinematicSystem):
         """Returns track as the lateral position of the tire in the intermediate frame"""
         return self.edges['I','T'].position[1]
     
-    def rake(self): 
+    def rake(self): # TODO: Improve name
         """Computes longitudinal displacement of the tire in the axle frame"""
         return self.position('O', ['W','LB','LA','X'])[0] \
              - self.static.position('O', ['W','LB','LA','X'])[0]
     
     def toe(self):
-        """Returns toe anlge"""
+        """Returns toe angle"""
         return self.edges['I','T'].rotation[2]
     
     def inclination(self):
@@ -77,11 +78,15 @@ class DoubleWishbone(KinematicSystem):
         raise NotImplementedError
     
     def caster(self):
+        """Computes caster by projecting the kingpin axis onto the
+        center (X-Z) body plane and comparing to the vertical body axis"""
         p_LB = self.position('O', ['LB','W','T','I'])
         p_LB = self.position('O', ['LB','W','T','I'])
         raise NotImplementedError
     
     def kingpin_inclination(self):
+        """Computes kingpin inclination by projecting the kingpin axis onto the
+        transverse (Y-Z) body plane and comparing to the vertical body axis"""
         raise NotImplementedError
     
     def contact_patch_lever(self):
@@ -110,6 +115,8 @@ class DoubleWishbone(KinematicSystem):
         return np.arccos(p_TB[1] / np.linalg.norm(p_TB))
     
     def steering_leverage(self) -> np.ndarray:
+        """Returns the :math:`(6,)`-vector of sensitivities of the steering wheel torque
+        to the various components of tire loads"""
         raise NotImplementedError
     
     # Alignment
@@ -270,7 +277,7 @@ class DoubleWishbone(KinematicSystem):
     def motion_sweep(self,
                      jounce_limits: tuple[float, float] = (-30, 30),
                      rack_limits: tuple[float, float] = (-30, 30),
-                     n: tuple(int, int) = (7,7)) \
+                     n: tuple[int, int] = (7,7)) \
             -> tuple[np.ndarray[float], np.ndarray[float], np.ndarray[DoubleWishbone]]:
         jounces = np.linspace(*jounce_limits, n[0])
         sweep = np.empty((n[0],int(2*np.floor((n[1]-1)/2)+1)), dtype=DoubleWishbone)

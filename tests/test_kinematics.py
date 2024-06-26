@@ -37,4 +37,3 @@ class TestKinematicSystem():
             ('O','C')])   
 
         return system 
-
