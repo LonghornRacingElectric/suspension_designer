@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 
 from suspension_designer.kinematics import datum_point_factory, KinematicSystem
 from suspension_designer.geometry   import (
-    lerp, Line, Plane, vector_alignment_angles, vector_alignment_rotation)
+    lerp, Line, Plane, vector_alignment_angles)
 
 __all__ = ['DoubleWishbone', 'DoubleWishboneBuilder']
 
@@ -77,6 +77,11 @@ class DoubleWishbone(KinematicSystem):
         raise NotImplementedError
     
     def caster(self):
+        p_LB = self.position('O', ['LB','W','T','I'])
+        p_LB = self.position('O', ['LB','W','T','I'])
+        raise NotImplementedError
+    
+    def kingpin_inclination(self):
         raise NotImplementedError
     
     def contact_patch_lever(self):
